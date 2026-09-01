@@ -1,0 +1,89 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck scripts/*.sh
+
+  setup:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: setup
+        uses: ./
+        with:
+          version: 2.0.0-alpha.1
+      - name: The binary runs and reports the requested version
+        run: |
+          pglifecycle --version
+          test "$(pglifecycle --version)" = "pglifecycle 2.0.0-alpha.1"
+          test "${{ steps.setup.outputs.version }}" = "2.0.0-alpha.1"
+
+  deploy:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./
+        with:
+          version: 2.0.0-alpha.1
+      - name: Create a skeleton project
+        run: pglifecycle create ./schema
+
+      - id: plan
+        uses: ./deploy
+        with:
+          version: 2.0.0-alpha.1
+          project: ./schema
+          host: localhost
+          username: postgres
+          password: postgres
+          database: postgres
+      - name: The plan was written and the outputs are set
+        run: |
+          head -1 "${{ steps.plan.outputs.plan }}" | grep -q '^-- pglifecycle deploy$'
+          case "${{ steps.plan.outputs.drift }}" in true|false) ;; *) exit 1 ;; esac
+
+      # An object that exists only in the database is a change, and
+      # dropping it is destructive, so this plan always reports drift.
+      - name: Drift the database
+        run: psql -c 'CREATE TABLE drifted (id int)'
+      - id: drifted
+        continue-on-error: true
+        uses: ./deploy
+        with:
+          version: 2.0.0-alpha.1
+          project: ./schema
+          output: drifted.sql
+          fail-on-drift: true
+          host: localhost
+          username: postgres
+          password: postgres
+          database: postgres
+      - name: fail-on-drift failed the step
+        run: |
+          test "${{ steps.drifted.outcome }}" = failure
+          test "${{ steps.drifted.outputs.drift }}" = true

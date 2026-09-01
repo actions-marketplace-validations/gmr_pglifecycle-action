@@ -1,0 +1,114 @@
+name: pglifecycle deploy
+description: >-
+  Generate the DDL that makes a database match a pglifecycle project,
+  publish it, and optionally fail when the two have drifted apart
+author: Gavin M. Roy
+branding:
+  icon: git-compare
+  color: blue
+
+inputs:
+  project:
+    description: Path to the pglifecycle project
+    required: true
+  version:
+    description: pglifecycle release tag to install, or "latest"
+    default: latest
+  dump:
+    description: Compare against this pg_dump file instead of a live database
+    default: ''
+  output:
+    description: Path to write the DDL script to
+    default: pglifecycle-plan.sql
+  allow-drop:
+    description: Include destructive statements (DROP, drop+recreate) in the plan
+    default: 'false'
+  no-privileges:
+    description: Leave grants and revokes out of the plan
+    default: 'false'
+  role:
+    description: Role to assume when connecting
+    default: ''
+  args:
+    description: Extra flags appended to the pglifecycle deploy invocation
+    default: ''
+  host:
+    description: Database host (PGHOST)
+    default: ''
+  port:
+    description: Database port (PGPORT)
+    default: ''
+  database:
+    description: Database name (PGDATABASE)
+    default: ''
+  username:
+    description: Database user (PGUSER)
+    default: ''
+  password:
+    description: Database password (PGPASSWORD)
+    default: ''
+  comment-on-pr:
+    description: >-
+      Post the plan as a sticky pull request comment. Needs
+      `permissions: pull-requests: write`.
+    default: 'false'
+  fail-on-drift:
+    description: Fail the step when the plan contains any change
+    default: 'false'
+  github-token:
+    description: Token used for the release lookup and the pull request comment
+    default: ${{ github.token }}
+
+outputs:
+  drift:
+    description: '"true" when the database does not match the project'
+    value: ${{ steps.deploy.outputs.drift }}
+  plan:
+    description: Path of the generated DDL script
+    value: ${{ steps.deploy.outputs.plan }}
+  excluded:
+    description: Count of destructive statements withheld from the plan
+    value: ${{ steps.deploy.outputs.excluded }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        PGL_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: ${GITHUB_ACTION_PATH}/../scripts/install.sh
+
+    - id: deploy
+      shell: bash
+      env:
+        PGL_PROJECT: ${{ inputs.project }}
+        PGL_OUTPUT: ${{ inputs.output }}
+        PGL_DUMP: ${{ inputs.dump }}
+        PGL_ALLOW_DROP: ${{ inputs.allow-drop }}
+        PGL_NO_PRIVILEGES: ${{ inputs.no-privileges }}
+        PGL_ROLE: ${{ inputs.role }}
+        PGL_ARGS: ${{ inputs.args }}
+        PGHOST: ${{ inputs.host }}
+        PGPORT: ${{ inputs.port }}
+        PGDATABASE: ${{ inputs.database }}
+        PGUSER: ${{ inputs.username }}
+        PGPASSWORD: ${{ inputs.password }}
+      run: ${GITHUB_ACTION_PATH}/../scripts/deploy.sh
+
+    - if: ${{ inputs.comment-on-pr == 'true' }}
+      shell: bash
+      env:
+        PGL_PROJECT: ${{ inputs.project }}
+        PGL_PLAN: ${{ steps.deploy.outputs.plan }}
+        PGL_DRIFT: ${{ steps.deploy.outputs.drift }}
+        PGL_EXCLUDED: ${{ steps.deploy.outputs.excluded }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: ${GITHUB_ACTION_PATH}/../scripts/comment.sh
+
+    - if: ${{ inputs.fail-on-drift == 'true' && steps.deploy.outputs.drift == 'true' }}
+      shell: bash
+      run: |
+        echo "::error::${{ inputs.project }} and the database have drifted apart; see the plan above"
+        exit 1

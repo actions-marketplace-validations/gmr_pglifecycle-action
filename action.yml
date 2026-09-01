@@ -1,0 +1,39 @@
+name: Setup pglifecycle
+description: Install pglifecycle and add it to PATH
+author: Gavin M. Roy
+branding:
+  icon: database
+  color: blue
+
+inputs:
+  version:
+    description: >-
+      Release tag to install, or "latest" for the newest release. While
+      pglifecycle has only prereleases, "latest" resolves to the newest
+      prerelease and logs a warning.
+    default: latest
+  repository:
+    description: Repository to install the release from
+    default: gmr/pglifecycle
+  github-token:
+    description: Token used for the release API lookup
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The release tag that was installed
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: Absolute path of the installed binary
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        PGL_VERSION: ${{ inputs.version }}
+        PGL_REPOSITORY: ${{ inputs.repository }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: ${GITHUB_ACTION_PATH}/scripts/install.sh
